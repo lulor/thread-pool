@@ -51,7 +51,7 @@ class ThreadPool {
                     free_workers_--;
 
                     /* extract a task and tell submit() there's a new free spot in the queue */
-                    task = tasks_.front();
+                    task = std::move(tasks_.front());
                     tasks_.pop();
                     submit_cv_.notify_one();
                 }
@@ -86,48 +86,43 @@ public:
     ~ThreadPool() {
         terminate();
         /* the joining of the threads must be permormed here, not in terminate() */
-        for (auto& w : workers_) {
+        for (auto &w : workers_) {
             if (w.joinable()) w.join();
         }
     }
 
-    ThreadPool(const ThreadPool& src) = delete;
+    ThreadPool(const ThreadPool &other) = delete;
 
-    ThreadPool& operator=(const ThreadPool& src) = delete;
+    ThreadPool &operator=(const ThreadPool &other) = delete;
 
-    /*
-     * By receiving the packaged_task by value, we ensure that its ownership
-     * is immediately transfered to the thread-pool ('pt' will be move-constructed)
-     * Since the packaged_task copy constructor is deleted, the only way
-     * to call this function is by providing an rvalue-reference
-     * By receveing the packaged_task by rvalue-reference instead, we make a single
-     * copy-construnction instead of two
-     */
-    template <typename R>
-    void submit(std::packaged_task<R()> pt) {
-        std::unique_lock ul(m_);
+    template <typename F, typename... Args, typename R = std::invoke_result_t<F, Args...>>
+    auto submit(F &&task, Args &&...args) -> std::future<R> {
+        auto pt_ptr = std::make_shared<std::packaged_task<R()>>(
+            [task = std::forward<F>(task), ... args = std::forward<Args>(args)]() { return task(args...); });
+        auto f = pt_ptr->get_future();
 
-        /*
-         * the "terminated_" flag must be read with the mutex acuired,
-         * to avoid "conflicts" with terminate()
-         */
-        if (terminated_) throw std::runtime_error("Thread pool is terminated");
+        {
+            std::unique_lock ul(m_);
 
-        /* if the queue is "full", wait for a task to complete */
-        submit_cv_.wait(ul, [this]() { return (tasks_.size() < max_qsize_); });
+            /*
+             * the "terminated_" flag must be read with the mutex acuired,
+             * to avoid "conflicts" with terminate()
+             */
+            if (terminated_) throw std::runtime_error("Thread pool is terminated");
 
-        /*
-         * move the pt to the heap and wrap it in a lambda using a shared_ptr
-         * the lambda will copy pt_ptr using its copy constructor
-         */
-        auto pt_ptr = std::make_shared<std::packaged_task<R()>>(std::move(pt));
-        tasks_.push([pt_ptr]() { (*pt_ptr)(); });
+            /* if the queue is "full", wait for a task to complete */
+            submit_cv_.wait(ul, [this]() { return (tasks_.size() < max_qsize_); });
 
-        /* if possible, create a new thread */
-        if (!free_workers_ && num_workers_ < max_workers_) addWorker();
+            tasks_.push([pt_ptr = std::move(pt_ptr)]() { (*pt_ptr)(); });
 
-        /* tell the workers there's a new job for them */
-        workers_cv_.notify_one();
+            /* if possible, create a new thread */
+            if (!free_workers_ && num_workers_ < max_workers_) addWorker();
+
+            /* tell the workers there's a new job for them */
+            workers_cv_.notify_one();
+        }
+
+        return f;
     }
 
     void terminate() {

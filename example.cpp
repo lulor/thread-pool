@@ -4,7 +4,7 @@
 
 enum command { submit1, submit2, result, status, help, quit, terminate, unknown };
 
-command getCommand(const std::string& s) {
+auto getCommand(const std::string &s) -> command {
     if (s == "1") return submit1;
     if (s == "2") return submit2;
     if (s == "r") return result;
@@ -25,7 +25,7 @@ void printHelp(int n1, int n2) {
     std::cout << "t: terminate the thread-pool" << std::endl;
 }
 
-std::string generateString(int min_len, int max_len) {
+auto generateString(int min_len, int max_len) -> std::string {
     static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     char buf[max_len];
     int len = (rand() % (max_len - min_len)) + min_len;
@@ -34,31 +34,23 @@ std::string generateString(int min_len, int max_len) {
     return buf;
 };
 
-std::future<int> submitTask1(ThreadPool& tp) {
-    std::packaged_task<int()> pt(std::bind(
-        [](int range) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            return rand() % range;
-        },
-        INT_MAX));
-    auto f = pt.get_future();
-    tp.submit(std::move(pt));
-    return f;
+auto submitTask1(ThreadPool &tp) -> std::future<int> {
+    auto task = [](int range) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        return rand() % range;
+    };
+    return tp.submit(task, INT_MAX);
 }
 
-std::future<std::string> submitTask2(ThreadPool& tp) {
-    std::packaged_task<std::string()> pt(std::bind(
-        [](int min_len, int max_len) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(700));
-            return generateString(min_len, max_len);
-        },
-        30, 80));
-    auto f = pt.get_future();
-    tp.submit(std::move(pt));
-    return f;
+auto submitTask2(ThreadPool &tp) -> std::future<std::string> {
+    auto task = [](int min_len, int max_len) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        return generateString(min_len, max_len);
+    };
+    return tp.submit(task, 30, 80);
 }
 
-void menu(ThreadPool& tp) {
+void menu(ThreadPool &tp) {
     bool stop = false;
     int n1 = 50;
     int n2 = 30;
@@ -114,11 +106,25 @@ void menu(ThreadPool& tp) {
     }
 }
 
-int main() {
-    ThreadPool tp(4, 8, 40);
+int func(int a) { return a * 4; }
+
+auto main() -> int {
+    ThreadPool tp(4, 8, 100);
     try {
+        {
+            std::vector<int> v = {10, 9, 23, 4, 0};
+            auto fn = [&v]() { std::sort(v.begin(), v.end()); };
+            auto f = tp.submit(fn);
+            f.get();
+            for (auto val : v) std::cout << val << " ";
+            std::cout << std::endl;
+        }
+        {
+            auto f = tp.submit([](const std::string &str) { std::cout << str << std::endl; }, "ciao");
+            f.get();
+        }
         menu(tp);
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
