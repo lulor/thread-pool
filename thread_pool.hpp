@@ -97,18 +97,14 @@ public:
 
     template <typename F, typename... Args, typename R = std::invoke_result_t<F, Args...>>
     auto submit(F &&task, Args &&...args) -> std::future<R> {
+        if (terminated_) throw std::runtime_error("Thread pool is terminated");
+
         auto pt_ptr = std::make_shared<std::packaged_task<R()>>(
             [task = std::forward<F>(task), ... args = std::forward<Args>(args)]() { return task(args...); });
         auto f = pt_ptr->get_future();
 
         {
             std::unique_lock ul(m_);
-
-            /*
-             * the "terminated_" flag must be read with the mutex acuired,
-             * to avoid "conflicts" with terminate()
-             */
-            if (terminated_) throw std::runtime_error("Thread pool is terminated");
 
             /* if the queue is "full", wait for a task to complete */
             submit_cv_.wait(ul, [this]() { return (tasks_.size() < max_qsize_); });
@@ -126,17 +122,17 @@ public:
     }
 
     void terminate() {
-        std::lock_guard lg(m_);
         if (terminated_) return;
+        std::lock_guard lg(m_);
         terminated_ = true;
         workers_cv_.notify_all();
     }
 
     void printStatus() const {
-        std::lock_guard lg(m_);
         if (terminated_) {
             std::cout << "Thread-Pool is terminated" << std::endl;
         } else {
+            std::lock_guard lg(m_);
             std::cout << "=== Thread-Pool status ===" << std::endl;
             std::cout << "min workers: " << min_workers_ << std::endl;
             std::cout << "max workers: " << max_workers_ << std::endl;
